@@ -92,9 +92,32 @@ const window = {
   __ModuleLoader__: { load: (entry) => { registration = entry } },
 }
 
+// Fake for the shell's dialog primitive. The real Modal body-portals its card;
+// here it returns a PLAIN element rather than a component element, because the
+// fake React above eagerly invokes function components — a nested fake
+// component would be called with no props and its whole subtree lost. A plain
+// element keeps the dialog walkable, which is all these checks need.
+function Modal(props) {
+  return {
+    type: 'ModalCard',
+    props: {
+      className: `bm-modal-card ${props.className ?? ''}`.trim(),
+      'data-open': String(props.open),
+      'data-title': props.title,
+      'data-close-label': props.closeLabel,
+      onClose: props.onClose,
+      children: [
+        props.description === undefined ? null : createElement('p', null, props.description),
+        props.children,
+      ],
+    },
+  }
+}
+
 const requireTable = {
   react: React,
   'react/jsx-runtime': { jsx: createElement, jsxs: createElement },
+  '@deepseek-ai/dsh-client-ui-primitives': { Modal },
 }
 
 // Evaluate the bundle in a function scope that shadows window/document.
@@ -208,6 +231,23 @@ function collectClasses(node, out = []) {
   return out
 }
 
+/** Depth-first search for every node whose className contains `token`. */
+function findAllClass(node, token, out = []) {
+  if (node === null || node === undefined || typeof node !== 'object') return out
+  if (Array.isArray(node)) {
+    for (const item of node) findAllClass(item, token, out)
+    return out
+  }
+  if (typeof node.props?.className === 'string' && node.props.className.includes(token)) out.push(node)
+  findAllClass(node.props?.children, token, out)
+  return out
+}
+
+/** Depth-first search for the first node whose className contains `token`. */
+function findClass(node, token) {
+  return findAllClass(node, token)[0] ?? null
+}
+
 const badge = footer.handle.component
 
 // Empty state: no config loaded, no balances.
@@ -225,9 +265,10 @@ const badge = footer.handle.component
   // The store is module-private; the badge reads whatever the last live fetch
   // stored, so assert on the structure that is always present.
   const classes = collectClasses(tree).join(' ')
+  const row = findClass(tree, 'bm-row')
   check('loaded state keeps the row class', classes.includes('bm-row'), classes)
-  check('loaded state exposes an accessible name', typeof (Array.isArray(tree) ? null : tree.props?.['aria-label']) === 'string',
-    JSON.stringify(tree?.props?.['aria-label']))
+  check('loaded state exposes an accessible name', typeof row?.props?.['aria-label'] === 'string',
+    JSON.stringify(row?.props?.['aria-label']))
 }
 
 // Collapsed rail must not throw, must add the rail class, and must not render
@@ -239,6 +280,131 @@ const badge = footer.handle.component
   check('rail state adds bm-rail', classes.includes('bm-rail'), classes)
   check('rail state omits the refresh button', !classes.includes('bm-refresh'), classes)
   check('rail state keeps the value cell for CSS to hide', classes.includes('bm-value'), classes)
+}
+
+// ---------------------------------------------------------------------------
+// 额度消耗趋势 dialog: the row opens it, and it is a real Modal.
+// ---------------------------------------------------------------------------
+
+console.log('\n# 额度消耗趋势 dialog')
+{
+  // Closed on load: the slot must render the row and nothing else.
+  const closed = render(footer.handle.component, { wide: true })
+  check('dialog is closed until the row is clicked', findClass(closed, 'bm-trend-body') === null)
+  check('row still renders while closed', collectClasses(closed).join(' ').includes('bm-row'))
+
+  // Clicking the row is the only trigger; the refresh arrow must not open it.
+  const row = findClass(render(badge, { wide: true }), 'bm-row')
+  check('row is a real button', row?.type === 'button', String(row?.type))
+  check('clicking the row opens the dialog', typeof row?.props?.onClick === 'function')
+  row?.props?.onClick?.()
+
+  const opened = render(footer.handle.component, { wide: true })
+  const card = findClass(opened, 'bm-modal-card')
+  const body = findClass(opened, 'bm-trend-body')
+  check('clicking the row mounts the dialog', body !== null)
+  check('dialog goes through the shell Modal primitive', card !== null)
+  check('dialog is open', card?.props?.['data-open'] === 'true', String(card?.props?.['data-open']))
+  check('dialog is titled 额度消耗趋势', card?.props?.['data-title'] === '额度消耗趋势', String(card?.props?.['data-title']))
+  check('dialog carries a close label', typeof card?.props?.['data-close-label'] === 'string', String(card?.props?.['data-close-label']))
+  check('dialog widens the shipped card', String(card?.props?.className).includes('bm-trend-dialog'), String(card?.props?.className))
+
+  const text = collectText(opened).join('|')
+  const classes = collectClasses(opened).join(' ')
+  check('dialog has period tabs', classes.includes('bm-trend-tabs'), classes.slice(0, 120))
+  check('tabs are exposed as tabs', findClass(opened, 'bm-range-btn')?.props?.role === 'tab',
+    String(findClass(opened, 'bm-range-btn')?.props?.role))
+  check('every period is offered as a tab',
+    ['近1小时', '近6小时', '近24小时', '近7天', '近30天', '全部'].every((label) => text.includes(label)),
+    text.slice(0, 200))
+  check('the 1h tab is selected by default', findClass(opened, 'bm-on') !== null)
+  check('dialog names what it consumes', text.includes('区间消耗'), text.slice(0, 300))
+  check('dialog shows the burn rate', text.includes('平均消耗速率'), text.slice(0, 300))
+  check('dialog explains the sampling model', text.includes('采样'), text.slice(0, 400))
+
+  // A tab click must not throw, and the selected period must move to that tab
+  // (the last one — 「全部」 — so the assertion cannot pass on the default).
+  const tabs = findAllClass(opened, 'bm-range-btn')
+  const lastTab = tabs[tabs.length - 1]
+  lastTab?.props?.onClick?.()
+  const afterTab = render(footer.handle.component, { wide: true })
+  check('selecting a tab keeps the dialog mounted', findClass(afterTab, 'bm-trend-body') !== null,
+    JSON.stringify(collectText(afterTab).join('|').slice(0, 120)))
+  const movedTabs = findAllClass(afterTab, 'bm-range-btn')
+  check('the clicked tab becomes the selected one',
+    movedTabs[movedTabs.length - 1]?.props?.['aria-selected'] === true,
+    JSON.stringify(movedTabs.map((t) => t.props['aria-selected'])))
+  check('exactly one tab is selected at a time',
+    movedTabs.filter((t) => t.props['aria-selected'] === true).length === 1,
+    JSON.stringify(movedTabs.map((t) => t.props['aria-selected'])))
+
+  // The dialog's own close path is the Modal's onClose.
+  card?.props?.onClose?.()
+  const closedAgain = render(footer.handle.component, { wide: true })
+  check('onClose unmounts the dialog', findClass(closedAgain, 'bm-trend-body') === null)
+}
+
+// ---------------------------------------------------------------------------
+// Trend math (pure helpers exported by the bundle).
+// ---------------------------------------------------------------------------
+
+console.log('\n# trend window math')
+{
+  const { periodUsage, bucketPoints, historyWindowPoints } = exportsObject
+
+  check('periodUsage is exported', typeof periodUsage === 'function')
+  check('bucketPoints is exported', typeof bucketPoints === 'function')
+  check('historyWindowPoints is exported', typeof historyWindowPoints === 'function')
+
+  // Consumption is the sum of the DECREASES only, so a top-up inside the window
+  // can never be reported as spend (the classic first-minus-last bug).
+  const burned = periodUsage([
+    { t: 0, value: 100 },
+    { t: 60000, value: 94 },
+    { t: 120000, value: 104 },
+    { t: 180000, value: 99 },
+  ])
+  check('consumption sums the decreases', burned.consumed === 11, String(burned.consumed))
+  check('top-ups are measured separately', burned.toppedUp === 10, String(burned.toppedUp))
+  check('net equals consumed - toppedUp', burned.net === 1, String(burned.net))
+  check('window keeps its opening balance', burned.start === 100 && burned.end === 99, `${burned.start}->${burned.end}`)
+  check('burn rate is per hour', burned.perHour === 220, String(burned.perHour))
+  check('samples are counted', burned.samples === 4, String(burned.samples))
+  check('a single sample has no burn rate', periodUsage([{ t: 0, value: 5 }]).perHour === null)
+  check('an empty window reports nothing', periodUsage([]).consumed === 0 && periodUsage([]).start === null)
+  check('a flat window consumes nothing', periodUsage([{ t: 0, value: 5 }, { t: 60000, value: 5 }]).consumed === 0)
+
+  // Bucketing keeps the LAST sample of each hour and drops the rest.
+  const bucketed = bucketPoints([
+    { t: 0, value: 10 },
+    { t: 60000, value: 9 },
+    { t: 3600000, value: 8 },
+    { t: 3660000, value: 7.5 },
+  ], 3600000)
+  check('one point per bucket', bucketed.length === 2, JSON.stringify(bucketed))
+  check('a bucket reports the balance it ended at', bucketed[0].value === 9, JSON.stringify(bucketed[0]))
+  check('buckets are floored to clock boundaries', bucketed[1].bucket === 3600000, String(bucketed[1].bucket))
+  check('no bucket width passes points through',
+    bucketPoints([{ t: 7, value: 1 }], 0).length === 1)
+
+  // The window helper carries the sample BEFORE the window in as the baseline.
+  const history = { history: [
+    { t: 0, balances: { CNY: 50 } },
+    { t: 1000, balances: { CNY: 40 } },
+    { t: 2000, balances: { CNY: 30 } },
+    { t: 3000, balances: { CNY: 20 } },
+  ] }
+  const carried = historyWindowPoints(history, 'CNY', 1500)
+  check('the pre-window sample is carried in', carried.length === 3 && carried[0].carry === true, JSON.stringify(carried))
+  check('in-window samples are not carried', carried[1].carry === false && carried[2].carry === false)
+  check('the carried sample is the window baseline', carried[0].value === 40, String(carried[0].value))
+  check('another currency is ignored', historyWindowPoints(history, 'USD', 1500).length === 0)
+  check('an empty history yields no points', historyWindowPoints({ history: [] }, 'CNY', 0).length === 0)
+  // Every sample is outside the window, so only the newest baseline survives —
+  // which is still exactly the opening balance the window needs.
+  const allBefore = historyWindowPoints(history, 'CNY', 5000)
+  check('the newest pre-window sample wins', allBefore.length === 1 && allBefore[0].value === 20,
+    JSON.stringify(allBefore))
 }
 
 console.log('\n# rendering the settings section')
@@ -294,7 +460,7 @@ console.log('\n# peak/off-peak tag rendering')
 
 console.log('\n# roll animation rules')
 {
-  const { rollDirectionsFor, mapDirections, formatAmount, amountDigits, amountSymbol } = exportsObject
+  const { rollDirectionsFor, mapDirections, formatAmount, amountDigits, amountSymbol, rollDelay } = exportsObject
 
   check('formatAmount trails the symbol', formatAmount(12.69, 'CNY') === '12.69￥', formatAmount(12.69, 'CNY'))
   check('formatAmount groups thousands', formatAmount(1234.5, 'CNY') === '1,234.50￥', formatAmount(1234.5, 'CNY'))
@@ -325,6 +491,63 @@ console.log('\n# roll animation rules')
     [300, 400, 500].includes(amountWeight), `${amountWeight} would be synthesised`)
   check('digits and symbol share a baseline', /align-items:baseline/.test(amountRule), amountRule)
   check('amount uses tabular figures', /tabular-nums/.test(valueRule), valueRule)
+
+  // ---- odometer cell geometry ----
+  // The cell used to be a fixed .62em, which was measured for the system UI
+  // font. Montserrat's digits are wider (~0.65em), so every cell clipped its
+  // glyph and the RIGHTMOST digit showed it worst (nothing to its right to hide
+  // the cut). 1ch is the advance of the element's own "0", so it follows
+  // whatever face is loaded.
+  const cellRule = /\.bm-cell\{([^}]*)\}/.exec(source)?.[1] ?? ''
+  const itemRule = /\.bm-cell-item\{([^}]*)\}/.exec(source)?.[1] ?? ''
+  check('digit cell is sized in ch, not a fixed em', /width:1(?:\.\d+)?ch/.test(cellRule), cellRule)
+  check('digit cell no longer hardcodes .62em', !/\.62em/.test(cellRule + itemRule), cellRule + ' | ' + itemRule)
+  check('cell still clips vertically for the roll window', /overflow:hidden/.test(cellRule), cellRule)
+  check('no glyph box overflows the cell', !/\.bm-cell-item\{[^}]*width:/.test(itemRule), itemRule)
+  // The cell must be at least one whole glyph advance: anything under 1ch
+  // re-introduces the horizontal clip this fixed.
+  const cellWidth = Number(/width:(1(?:\.\d+)?)ch/.exec(cellRule)?.[1] ?? 0)
+  check('cell width covers a full digit advance', cellWidth >= 1, `${cellWidth}ch`)
+
+  // ---- odometer stagger ----
+  // Each position starts a little after the one to its right, leading with the
+  // least-significant digit, so the cells do not all roll as one block.
+  // Walk the DIGITS of a fixed string in order (the decimal point is a cell too
+  // but never animates, so it carries no delay).
+  const text = '12.69'
+  const digitDelays = [...text]
+    .map((ch, i) => ({ ch, delay: ch >= '0' && ch <= '9' ? rollDelay(i, text, 0.04) : null }))
+    .filter((cell) => cell.delay !== null)
+  check('one delay per digit', digitDelays.length === 4, JSON.stringify(digitDelays))
+  check('the units digit starts first (zero delay)',
+    digitDelays[digitDelays.length - 1].delay === 0, JSON.stringify(digitDelays))
+  check('delay grows monotonically from the units digit leftwards',
+    digitDelays.every((cell, i) => i === 0 || cell.delay < digitDelays[i - 1].delay),
+    digitDelays.map((c) => `${c.ch}:${c.delay}`).join(' '))
+  check('each step equals the configured stagger',
+    digitDelays.every((cell, i) => cell.delay === (digitDelays.length - 1 - i) * 0.04),
+    digitDelays.map((c) => `${c.ch}:${c.delay}`).join(' '))
+  check('a non-digit cell gets no delay',
+    [...'12.69'].map((ch, i) => (ch >= '0' && ch <= '9' ? null : rollDelay(i, text, 0.04))).every((d) => d === null || typeof d === 'number'))
+  check('separators do not consume a stagger step',
+    // '1,234.50' has the same digit count as '1234.50', so the leftmost digit
+    // must get the same delay despite the extra character.
+    rollDelay(0, '1,234.50', 0.04) === rollDelay(0, '1234.50', 0.04),
+    `${rollDelay(0, '1,234.50', 0.04)} vs ${rollDelay(0, '1234.50', 0.04)}`)
+  check('a zero step means every position rolls together',
+    ['0', '1', '2', '3', '4', '5'].every((_, i) => rollDelay(i, '123456', 0) === 0))
+  check('delay scales with the configured step',
+    rollDelay(0, '7.48', 0.02) === 0.04 && rollDelay(0, '7.48', 0.04) === 0.08,
+    `${rollDelay(0, '7.48', 0.02)} / ${rollDelay(0, '7.48', 0.04)}`)
+
+  // The delay must reach CSS, and a waiting cell must hold its start state
+  // (`backwards`) instead of flashing the final value before it starts.
+  const rollRule = /\.bm-cell\.bm-roll-up \.bm-cell-track\{([^}]*)\}/.exec(source)?.[1] ?? ''
+  check('animation consumes --bm-delay', /var\(--bm-delay/.test(rollRule), rollRule)
+  check('animation fill is backwards while waiting', /backwards/.test(rollRule), rollRule)
+  check('RollDigits sets --bm-delay per cell', /--bm-delay/.test(source) && /rollDelay\(/.test(source))
+  check('rollStagger is a configurable parameter',
+    /rollStagger/.test(source) && /rollStagger/.test(await readFile(new URL('../lib/index.js', import.meta.url), 'utf8')))
   check('settings big number uses the brand font too', /\.bm-live-num\{[^}]*--dsw-font-family-brand/.test(source))
 
   // Symbol placement: the client's option ids must cover the host's whitelist,
