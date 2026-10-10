@@ -1,0 +1,16 @@
+# dsh-balance-monitor profile patch layer — insert one loader entry for the
+# plugin package. The entry is a normal cordis loader entry (id + package name);
+# the browser half is picked up by dsh-client-modules through the package's
+# dsh.client declaration (package.json), exactly like the shipped ui-* packages.
+#
+# `inject: [credentials]` is the only hard requirement: apply() resolves
+# DEEPSEEK_API_KEY through that service. `webServer` is deliberately NOT
+# injected — the Electron Desktop composition never provides it, and a row that
+# waits on it stays `pending (waiting for service: webServer)` forever, so the
+# plugin would load without ever registering a route (and the badge would stay
+# blank). apply() therefore takes whatever carrier exists: the real web server
+# on the Web profile, a 127.0.0.1 loopback server inside the Desktop app.
+- insert:
+    - id: balance-monitor
+      name: 'dsh-balance-monitor'
+      inject: [credentials]

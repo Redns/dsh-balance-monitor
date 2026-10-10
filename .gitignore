@@ -1,0 +1,8 @@
+node_modules/
+*.log
+
+# Local clone of the reference plugin this project was modelled on
+# (https://github.com/yoiizesdev-crypto/DSH-Balance-display). Kept out of the
+# plugin package: `files` in package.json already whitelists only what ships.
+ref-dsh-balance-display/
+ref-*/
