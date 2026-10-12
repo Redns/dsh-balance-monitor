@@ -289,18 +289,20 @@ console.log('\n# every collected icon is accepted by the host')
   const { readFile } = await import('node:fs/promises')
   const { fileURLToPath } = await import('node:url')
   const { dirname: dirOf, join: joinOf } = await import('node:path')
+  const { loadClientBundle } = await import('./lib/load-client-bundle.mjs')
   const here = dirOf(fileURLToPath(import.meta.url))
   const hostSource = await readFile(joinOf(here, '..', 'lib', 'index.js'), 'utf8')
-  const clientSource = await readFile(joinOf(here, '..', 'lib', 'client.js'), 'utf8')
 
   const hostList = hostSource.match(/const ICON_IDS = \[([\s\S]*?)\];/)
   const hostIds = hostList === null
     ? []
     : (hostList[1].match(/"[a-z0-9]+"/g) ?? []).map((s) => s.replace(/"/g, ''))
 
-  const clientCollection = clientSource.match(/var ICONS = \[([\s\S]*?)\n    \]/)
-  const clientBody = clientCollection === null ? '' : clientCollection[1]
-  const clientIds = [...clientBody.matchAll(/\{ id: '([a-z0-9]+)'/g)].map((m) => m[1])
+  // Read the collection from the evaluated bundle, not from its source text:
+  // source parsing breaks whenever the file is reformatted, and the icon
+  // entries carry nested arrays/objects that defeat a naive scan.
+  const client = await loadClientBundle()
+  const clientIds = client.exports.ICONS.map((entry) => entry.id)
 
   check('client collection found', clientIds.length >= 12, String(clientIds.length))
   check('host list found', hostIds.length >= 12, String(hostIds.length))
@@ -324,7 +326,7 @@ console.log('\n# every collected icon is accepted by the host')
   // picker's ids must be exactly the host's whitelist.
   const hostSymbols = [...(hostSource.match(/const SYMBOL_POSITIONS = \[([\s\S]*?)\];/)?.[1] ?? '')
     .matchAll(/"([a-z]+)"/g)].map((m) => m[1])
-  const clientSymbols = [...clientSource.matchAll(/id: '([a-z]+)', label: '[^']*', hint: '[^']*'/g)].map((m) => m[1])
+  const clientSymbols = client.exports.SYMBOL_OPTIONS.map((option) => option.id)
   check('host whitelists three placements', hostSymbols.length === 3, hostSymbols.join(','))
   check('client offers exactly the host placements',
     hostSymbols.length > 0 && hostSymbols.every((id) => clientSymbols.includes(id)) && clientSymbols.length === hostSymbols.length,

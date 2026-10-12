@@ -114,10 +114,28 @@ function Modal(props) {
   }
 }
 
+/**
+ * Fake for the shell's Tooltip. Like Modal it must return a PLAIN element: the
+ * fake React eagerly invokes function components, so a nested component would
+ * be called with no props and its subtree lost. The row rides along as
+ * `children` so the tree stays walkable, and the props are kept for assertions.
+ */
+function Tooltip(props) {
+  return {
+    type: 'Tooltip',
+    props: {
+      label: props.label,
+      side: props.side,
+      align: props.align,
+      children: props.children,
+    },
+  }
+}
+
 const requireTable = {
   react: React,
   'react/jsx-runtime': { jsx: createElement, jsxs: createElement },
-  '@deepseek-ai/dsh-client-ui-primitives': { Modal },
+  '@deepseek-ai/dsh-client-ui-primitives': { Modal, Tooltip },
 }
 
 // Evaluate the bundle in a function scope that shadows window/document.
@@ -246,6 +264,20 @@ function findAllClass(node, token, out = []) {
 /** Depth-first search for the first node whose className contains `token`. */
 function findClass(node, token) {
   return findAllClass(node, token)[0] ?? null
+}
+
+/** Depth-first search for the first node whose `type` is exactly `type`. */
+function findType(node, type, out = null) {
+  if (out !== null || node === null || node === undefined || typeof node !== 'object') return out
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      out = findType(item, type, out)
+      if (out !== null) return out
+    }
+    return out
+  }
+  if (node.type === type) return node
+  return findType(node.props?.children, type, out)
 }
 
 const badge = footer.handle.component
@@ -552,7 +584,35 @@ console.log('\n# roll animation rules')
 
   // Symbol placement: the client's option ids must cover the host's whitelist,
   // otherwise the picker offers a value the host rejects with a 400.
-  const clientIds = [...source.matchAll(/id: '([a-z]+)', label: '[^']*', hint: '[^']*'/g)].map((m) => m[1])
+  // Bracket-matched and whitespace/quote tolerant — this file gets reformatted
+  // by tooling, and a layout-sensitive regex here already produced a false
+  // failure once.
+  const arrayLiteral = (text, marker) => {
+    const start = text.indexOf(marker)
+    if (start === -1) return ''
+    const open = text.indexOf('[', start)
+    if (open === -1) return ''
+    let depth = 0
+    let quote = null
+    for (let i = open; i < text.length; i += 1) {
+      const ch = text[i]
+      if (quote !== null) {
+        if (ch === '\\') i += 1
+        else if (ch === quote) quote = null
+        continue
+      }
+      if (ch === '"' || ch === "'" || ch === '`') quote = ch
+      else if (ch === '[' || ch === '{') depth += 1
+      else if (ch === ']' || ch === '}') {
+        depth -= 1
+        if (depth === 0) return text.slice(open + 1, i)
+      }
+    }
+    return ''
+  }
+  const optionBlock = arrayLiteral(source, 'var SYMBOL_OPTIONS = [')
+  const clientIds = [...optionBlock.matchAll(/id:\s*["']([a-z]+)["']/g)].map((m) => m[1])
+  check('SYMBOL_OPTIONS block found', optionBlock.length > 0, String(optionBlock.length))
   check('client exposes the three placements',
     ['after', 'before', 'none'].every((id) => clientIds.includes(id)), clientIds.join(','))
 
@@ -599,29 +659,11 @@ console.log('\n# roll animation rules')
 
 console.log('\n# currency-symbol placement')
 {
-  // Pull the function out of the bundle source and drive it with stubs: the
-  // real one lives inside the module factory and is not exported.
-  const src = source.slice(source.indexOf('function AmountValue(props) {'))
-  const end = src.indexOf('\n    }\n')
-  const body = end === -1 ? src : src.slice(0, end + '\n    }'.length)
-  check('AmountValue found in the bundle', body.startsWith('function AmountValue(props) {') && body.length > 60, String(body.length))
-
-  const build = new Function('react', 'RollDigits', 'amountDigits', 'amountSymbol', 'symbolPosition',
-    `${body}\n return AmountValue`)
-
-  const createElement = (type, props, ...children) => {
-    const flat = children.flat(Infinity).filter((c) => c !== null && c !== undefined)
-    if (typeof type === 'function') return type({ ...props, children: flat })
-    return { type, props: { ...(props ?? {}), children: flat } }
-  }
-  const RollDigits = (props) => ({ type: 'RollDigits', props: { text: props.text } })
-  const AmountValue = build(
-    { createElement },
-    RollDigits,
-    exportsObject.amountDigits,
-    exportsObject.amountSymbol,
-    (v) => (['after', 'before', 'none'].includes(v) ? v : 'after'),
-  )
+  // Driven from the EVALUATED bundle (the component lives inside the module
+  // factory closure, so slicing it out of the source text is both fragile under
+  // reformatting and unable to see its real collaborators).
+  const { AmountValue } = exportsObject
+  check('AmountValue is exported by the bundle', typeof AmountValue === 'function')
 
   /** Flatten a rendered tree to the text it would show, in document order. */
   const flatten = (node) => {
@@ -664,10 +706,44 @@ console.log('\n# footer alignment contract')
 
   // The wallet is the default icon, and its artwork must stay within the same
   // optical width as the other glyphs so the label lands on the settings column.
-  const wallet = /id: 'wallet'[\s\S]*?draw: function \(\) \{([\s\S]*?)\n      \} \}/.exec(source)?.[1] ?? ''
-  const xs = [...wallet.matchAll(/-?\d+(?:\.\d+)?/g)].map(Number).filter((n) => n >= 1 && n <= 15)
-  check('wallet artwork exists', wallet.length > 0)
-  check('wallet default is configured', /icon: 'wallet'/.test(source), '')
+  // Read from the evaluated bundle rather than the source text.
+  const walletEntry = exportsObject.ICONS.find((entry) => entry.id === 'wallet')
+  check('wallet artwork exists', walletEntry !== undefined && walletEntry.draw().length > 0)
+  check('wallet default is configured', /icon:\s*["']wallet["']/.test(source), '')
+  // Its own CSS must not reintroduce a hardcoded glyph width.
+  check('wallet artwork is not width-constrained by CSS',
+    !/\.bm-cell-item\{[^}]*width:/.test(source), '')
+}
+
+// ---------------------------------------------------------------------------
+// Hover tooltip: the row must use the shell's own Tooltip primitive so it looks
+// like the shipped sidebar controls, and must NOT also carry a native `title`
+// (which would show a second, unstyled bubble at the same time).
+// ---------------------------------------------------------------------------
+
+console.log('\n# hover tooltip')
+{
+  const tree = render(badge, { wide: true })
+  const tip = findType(tree, 'Tooltip')
+  check('row is wrapped in the shell Tooltip', tip !== null)
+  check('tooltip is labelled', typeof tip?.props?.label === 'string' && tip.props.label.length > 0,
+    String(tip?.props?.label))
+  check('tooltip names the click action', String(tip?.props?.label).includes('额度消耗趋势'), String(tip?.props?.label))
+  check('tooltip prefers the top side (footer sits at the viewport bottom)', tip?.props?.side === 'top',
+    String(tip?.props?.side))
+  check('tooltip is centre-aligned on the row', tip?.props?.align === 'center', String(tip?.props?.align))
+
+  // The row keeps its accessible name even though the native `title` is gone —
+  // leaving `title` on would render a second, unstyled bubble next to the
+  // shell's, because a native tooltip cannot be suppressed by CSS.
+  const row = findClass(tree, 'bm-row')
+  check('row no longer carries a native title', row?.props?.title === undefined, String(row?.props?.title))
+  check('row keeps an aria-label', typeof row?.props?.['aria-label'] === 'string', String(row?.props?.['aria-label']))
+  check('row is still the click target', typeof row?.props?.onClick === 'function')
+  // The refresh arrow is a separate control, so its native tooltip stays.
+  const arrows = findAllClass(tree, 'bm-refresh')
+  check('refresh arrow keeps its own tooltip', arrows.length === 1 && typeof arrows[0].props.title === 'string',
+    String(arrows[0]?.props?.title))
 }
 
 console.log(`\n${failures === 0 ? 'CLIENT BUNDLE OK' : `${failures} CHECK(S) FAILED`}`)

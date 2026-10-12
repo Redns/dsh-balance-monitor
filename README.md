@@ -15,6 +15,25 @@
 **点击整行**打开「额度消耗趋势」弹窗（剩余额度曲线 + 区间消耗，Tab 切换时间段）；行右侧的箭头是**手动刷新余额**。
 侧边栏收窄成图标栏时，自动退化成与设置按钮同样的方形图标，点击仍然打开弹窗。
 
+鼠标悬停在余额行上时，提示气泡用的是 **DSH 原生 Tooltip**
+（`@deepseek-ai/dsh-client-ui-primitives` 的 `Tooltip`）—— 和下方的「设置」按钮、侧边栏其它控件
+**同一个组件、同一张样式表**，所以外观与出现时机完全一致：
+
+| 项 | 值 | 来源 |
+| --- | --- | --- |
+| 背景 / 文字 | `--dsw-alias-tooltip-bg` / `--dsw-static-neutral-bluish-00` | 官方 `Tooltip.module.css` |
+| 字号 / 行高 | 13px / 20px | 同左 |
+| 内边距 / 圆角 | 3px 7px / `--dsw-radius-sm` | 同左 |
+| 出现动画 | 150ms 淡入；`prefers-reduced-motion` 下不动画 | 同左 |
+| 位置 | 默认在上方，空间不够自动翻到下方 | 官方定位逻辑 |
+
+> 早先这里用的是浏览器原生 `title` 属性 —— 样式由浏览器决定、无法控制，延迟约 1 秒，和 DSH 风格不一致。
+> 原生 `title` 已移除：留着它会**同时弹出两个提示**（原生气泡无法用 CSS 抑制）。行仍保留 `aria-label`。
+> 行内刷新箭头的原生 tooltip 保持不变，它是独立控件。
+>
+> 这个 primitive 是客户端模块表里的**种子模块**（shell 的 `staticModules` 里有它），所以**不需要**
+> 在 `package.json` 声明 `dsh.client.external`。
+
 同时在 **设置 → 余额监控** 提供完整页面：实时余额、各币种明细、余额趋势曲线（十字光标悬停）、参数调节、诊断信息。
 
 - **数据源**：DeepSeek 官方余额接口 `GET https://api.deepseek.com/user/balance`

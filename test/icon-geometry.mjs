@@ -20,9 +20,14 @@
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { loadClientBundle } from './lib/load-client-bundle.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
+// `source` is still needed for the CSS-contract assertions below; the icon
+// collection itself comes from the EVALUATED bundle (see test/lib/), because
+// source parsing breaks whenever the file is reformatted.
 const source = await readFile(join(here, '..', 'lib', 'client.js'), 'utf8')
+const ICONS = (await loadClientBundle()).exports.ICONS
 
 let failures = 0
 function check(label, condition, detail) {
@@ -34,25 +39,9 @@ function check(label, condition, detail) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Extract the collection from the bundle.
-// ---------------------------------------------------------------------------
-
-const start = source.indexOf('var ICONS = [')
-const end = source.indexOf('\n    ]\n', start)
-if (start === -1 || end === -1) throw new Error('could not locate the ICONS literal in lib/client.js')
-const literal = source.slice(start + 'var ICONS = '.length, end + '\n    ]'.length)
-
 const createElement = (type, props) => ({ type, props: props ?? {} })
 const p = (key, d) => createElement('path', { key, d })
 const c = (key, cx, cy, r) => createElement('circle', { key, cx, cy, r })
-const react = { createElement }
-const ICONS = new Function('react', 'p', 'c', 'yuanMark', `return ${literal}`)(react, p, c, () => [
-  p('y1', 'M6.5 5.6 8 7.5l1.5-1.9'),
-  p('y2', 'M8 7.5v4'),
-  p('y3', 'M6.4 8.4h3.2'),
-  p('y4', 'M6.4 9.6h3.2'),
-])
 
 // ---------------------------------------------------------------------------
 // A real SVG path-data parser, sufficient for the command set in use and for

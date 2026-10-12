@@ -2,6 +2,30 @@
 
 ## 1.1.0
 
+### 变更
+
+- **余额行的悬浮提示改用 DSH 原生 Tooltip**：之前用的是浏览器原生 `title` 属性，样式由浏览器决定、
+  无法控制，而且周围有约 1 秒延迟。现在改用侧边栏其它控件同款的
+  `@deepseek-ai/dsh-client-ui-primitives` 的 `Tooltip`：同一个组件、同一张样式表
+  （`--dsw-alias-tooltip-bg` 深色底 + `--dsw-static-neutral-bluish-00` 文字、13px/20px、
+  `--dsw-radius-sm` 圆角、150ms 淡入、`prefers-reduced-motion` 下不动画），所以悬浮余额行
+  和悬浮它下面的「设置」看起来完全一致。提示默认出现在**上方**，空间不够时自动翻到下方。
+
+  同时**移除了行上的原生 `title`** —— 两者并存会同时弹出两个提示气泡（原生那个无法用 CSS 抑制）；
+  行仍保留 `aria-label`，读屏软件不受影响。行内右侧刷新箭头的原生 tooltip 保持不变（它是独立控件）。
+
+  这个 primitive 是客户端模块表里的**种子模块**（shell 的 `staticModules` 含
+  `@deepseek-ai/dsh-client-ui-primitives`），所以不需要在 `package.json` 里声明
+  `dsh.client.external`。
+
+### 修复
+
+- **测试不再解析 bundle 源码**：新增 `test/lib/load-client-bundle.mjs`，把浏览器半边**当成模块求值**
+  来读取图标集合、货币符号选项与纯函数。原先靠正则/手写括号扫描从 `lib/client.js` 里抠数组，
+  一旦文件被工具重排（引号风格、换行、缩进变化）就会误判——本轮就连续踩了三次：
+  `ICONS` 条目跨行、`SYMBOL_OPTIONS` 跨行、以及一个"方括号与大括号混在一起计数"导致扫描
+  在第一个图标处就以为数组结束了。求值还顺带验证了 bundle 本身能加载（语法错误会像浏览器里一样失败）。
+
 ### 修复
 
 - **最右侧数字被裁掉**：数字格子的宽度原本是固定 `.62em`，那是按**系统字体**（数字宽约
