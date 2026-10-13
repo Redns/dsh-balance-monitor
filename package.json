@@ -1,7 +1,7 @@
 {
   "name": "dsh-balance-monitor",
-  "version": "1.1.0",
-  "description": "DSH 余额监控插件：在侧边栏底部（设置按钮上方）用金币/钱包图标实时显示 DeepSeek 账户余额，点击余额行弹出「额度消耗趋势」弹窗（剩余额度曲线 + 区间消耗，Tab 切换时间段），余额变化时数字滚轮动画，并提供「设置 → 余额监控」页面（余额明细、趋势曲线、参数、诊断）。",
+  "version": "1.2.0",
+  "description": "DSH 余额监控插件：在侧边栏底部（设置按钮上方）用金币/钱包图标实时显示 DeepSeek 账户余额，点击余额行弹出「额度消耗趋势」弹窗（剩余额度曲线 + 区间消耗，Tab 切换时间段）。历史采样保存在浏览器本地（Float32，保留 30 天，约 2MB），并提供「设置 → 余额监控」页面（余额明细、趋势曲线、参数、诊断）。",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
@@ -29,6 +29,7 @@
   "scripts": {
     "test": "node test/publishable.mjs && node test/host-smoke.mjs && node test/pricing-phase.mjs && node test/desktop-carrier.mjs && node test/client-smoke.mjs && node test/icon-geometry.mjs",
     "test:live": "node test/live-verify.mjs",
+    "verify:history": "node tools/verify-local-history.mjs",
     "preview": "node tools/make-icon-preview.mjs && node tools/make-alignment-preview.mjs"
   },
   "keywords": [
