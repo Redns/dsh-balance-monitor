@@ -542,6 +542,21 @@ console.log('\n# peak/off-peak tag rendering')
   check('idle colour is the theme success alias', /\.bm-phase-idle\{[^}]*--dsw-alias-state-success-primary/.test(source))
   check('peak colour carries a fallback (theme has no warning alias)',
     /\.bm-phase-peak\{[^}]*--dsw-alias-state-warning-primary,#/.test(source))
+
+  // ---- collapsed rail ----
+  // The rail shows the tag ALONE. A 36px rail button cannot hold an 18px icon
+  // next to a 26px pill: the pill used to be clipped on its right edge and the
+  // row read as two marks fighting over one button.
+  const railHideIcon = /\.bm-row\.bm-rail:has\(\.bm-phase\) \.bm-icon\{([^}]*)\}/.exec(source)?.[1] ?? ''
+  check('rail hides the icon once a tag is rendered', /display:none/.test(railHideIcon), railHideIcon)
+  // …but only when a tag exists: a rail with no tag to show (时段标签 off, or no
+  // phase from the host yet) must still be the icon, never blank.
+  const railIcon = /\.bm-row\.bm-rail \.bm-icon\{([^}]*)\}/.exec(source)?.[1] ?? ''
+  check('rail keeps the icon for the no-tag case', railIcon !== '' && !/display:none/.test(railIcon), railIcon)
+  // Alone in the button, the pill is centred as a box; the wide row's optical
+  // nudge would read as "sitting low" here.
+  const railPhase = /\.bm-row\.bm-rail \.bm-phase\{([^}]*)\}/.exec(source)?.[1] ?? ''
+  check('rail centres the tag instead of nudging it down', /top:0/.test(railPhase), railPhase)
 }
 
 // ---------------------------------------------------------------------------
@@ -802,6 +817,33 @@ console.log('\n# hover tooltip')
   const arrows = findAllClass(tree, 'bm-refresh')
   check('refresh arrow keeps its own tooltip', arrows.length === 1 && typeof arrows[0].props.title === 'string',
     String(arrows[0]?.props?.title))
+
+  // ---- the collapsed rail's bubble ----
+  // The rail hides the amount with CSS, so its bubble carries the number and the
+  // time it was read. Pure string assembly, so every symbol position and both
+  // "not loaded yet" cases can be pinned without a DOM.
+  const { railHoverLabel } = exportsObject
+  check('railHoverLabel is exported for the rail bubble', typeof railHoverLabel === 'function')
+  const stamp = Date.UTC(2026, 0, 1, 4, 5, 6) // local-rendered, so assert the shape
+  const after = railHoverLabel(12.5, 'CNY', 'after', stamp)
+  check('the rail bubble reads 「金额（数据更新于 时间）」',
+    /^12\.50￥（数据更新于 \d{2}:\d{2}:\d{2}）$/.test(after), after)
+  check('the rail bubble does not repeat the click hint',
+    !after.includes('额度消耗趋势'), after)
+  check('the rail bubble honours the symbol-before setting',
+    /^￥12\.50（数据更新于 /.test(railHoverLabel(12.5, 'CNY', 'before', stamp)),
+    railHoverLabel(12.5, 'CNY', 'before', stamp))
+  check('the rail bubble honours the symbol-off setting',
+    /^12\.50（数据更新于 /.test(railHoverLabel(12.5, 'CNY', 'none', stamp)),
+    railHoverLabel(12.5, 'CNY', 'none', stamp))
+  check('the rail bubble maps the currency mark',
+    railHoverLabel(3, 'USD', 'after', stamp).startsWith('3.00$'), railHoverLabel(3, 'USD', 'after', stamp))
+  check('a value with no reading yet says so',
+    railHoverLabel(12.5, 'CNY', 'after', null) === '12.50￥（尚未更新）',
+    railHoverLabel(12.5, 'CNY', 'after', null))
+  check('no value at all is a loading hint, not 「--」',
+    railHoverLabel(null, 'CNY', 'after', null) === '余额读取中… · 点击查看额度消耗趋势',
+    railHoverLabel(null, 'CNY', 'after', null))
 }
 
 // ---------------------------------------------------------------------------
@@ -1268,6 +1310,107 @@ console.log('\n# persistence across page loads')
     String(after?.bytes))
   check('the live series is attributed to the browser store', after?.storage === 'local',
     String(after?.storage))
+}
+
+// ---------------------------------------------------------------------------
+// Collapsed rail with a peak/off-peak tag.
+//
+// The rail's CSS contract above (icon hidden, tag centred) is only meaningful
+// if the tag really renders in rail mode, and the shared store never has one —
+// no host during the smoke run. So this drives a fresh bundle against a stub
+// host that reports a phase.
+//
+// It lives at the END of the run on purpose: `apply()` kicks its first
+// config/balance reads off synchronously and they only run once the program
+// first awaits, so stubbing the global fetch earlier would feed THIS stub's
+// balance to the shared store the checks above read.
+// ---------------------------------------------------------------------------
+
+console.log('\n# collapsed rail with a peak/off-peak tag')
+{
+  const savedFetch = globalThis.fetch
+  globalThis.fetch = (url) => {
+    const path = String(url)
+    const body = path.includes('/balance-monitor/balance')
+      ? {
+          balances: [{
+            currency: 'CNY',
+            balance: 12.5,
+            granted: 0,
+            toppedUp: 12.5,
+            total: 12.5,
+            available: true,
+          }],
+          currency: 'CNY',
+          available: true,
+          phase: { phase: 'off', label: '低谷', hint: '当前为低谷时段' },
+          spend: { CNY: 0 },
+          ts: Date.now(),
+        }
+      : path.includes('/balance-monitor/health')
+        ? { ok: true, version: '1.2.1', node: 'v22', requests: 1, stateFile: 'x', lastError: null }
+        : { config: { autoRefresh: false, refreshInterval: 30 }, history: [], spend: {} }
+    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) })
+  }
+  const fresh = evaluateBundle({ __ModuleLoader__: { load: () => {} }, localStorage: localStorageGlobal })
+  const railBundle = fresh.factory((specifier) => {
+    if (!(specifier in requireTable)) throw new Error(`unexpected require("${specifier}")`)
+    return requireTable[specifier]
+  })
+  const railRegistrations = []
+  const railSlots = {
+    inject(name, factory) {
+      railRegistrations.push({ name, handle: factory() })
+    },
+    register(options, component) {
+      return { ...options, component }
+    },
+  }
+  const railCtx = {
+    get: (name) => (name === 'slots' ? railSlots : undefined),
+    inject(services, callback) {
+      callback({ get: (name) => (services.includes(name) ? railCtx.get(name) : undefined) })
+    },
+    effect() {},
+    on() {},
+  }
+  railBundle.apply(railCtx)
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  globalThis.fetch = savedFetch
+
+  const railFooter = railRegistrations.find((r) => r.name === 'sidebar.footer.action')
+  const railTree = render(railFooter?.handle?.component, { wide: false })
+  const railClasses = collectClasses(railTree).join(' ')
+  const railText = collectText(railTree).join('')
+  const wideText = collectText(render(railFooter?.handle?.component, { wide: true })).join('')
+  check('the host phase reaches the rail row', railText.includes('低谷'), railText)
+  check('the rail tag carries the idle tone class', railClasses.includes('bm-phase-idle'), railClasses)
+  check('the rail row is in rail mode', railClasses.includes('bm-rail'), railClasses)
+  // The rail drops the label and the amount through CSS, so a function-tree walk
+  // still sees them — the classes are the contract. The TAG is what has to be
+  // real, and it is: same element the wide row renders.
+  check('the wide row is unchanged by the rail rules', wideText.includes('余额') && wideText.includes('12.50'),
+    wideText)
+  // The icon NODE is still there — the CSS rule is what removes it from the
+  // rail, and a function-tree walk cannot see that. This check exists so the
+  // ":has" selector keeps having something to target if the tree changes.
+  check('the icon stays in the tree for the rail CSS to hide', findType(railTree, 'svg') !== null)
+
+  // The rail's bubble carries what the 36px button cannot print: the amount and
+  // the age of the reading.
+  const railTip = findType(railTree, 'Tooltip')
+  const railLabel = String(railTip?.props?.label ?? '')
+  const railAria = String(findClass(railTree, 'bm-row')?.props?.['aria-label'] ?? '')
+  check('the rail bubble is the amount plus its update time',
+    /^12\.50￥（数据更新于 \d{2}:\d{2}:\d{2}）$/.test(railLabel), railLabel)
+  check('the rail bubble replaces the wide action hint', !railLabel.includes('查看额度消耗趋势'), railLabel)
+  // The accessible name still says what clicking does, unlike the visible bubble.
+  check('the rail keeps the click action in its aria-label',
+    railAria.startsWith(railLabel) && railAria.includes('点击查看额度消耗趋势'), railAria)
+  // Same store, wide render: the wide bubble must NOT switch to the amount.
+  const wideTip = findType(render(railFooter?.handle?.component, { wide: true }), 'Tooltip')
+  check('the wide row keeps the action hint',
+    String(wideTip?.props?.label ?? '').startsWith('查看额度消耗趋势'), String(wideTip?.props?.label))
 }
 
 console.log(`\n${failures === 0 ? 'CLIENT BUNDLE OK' : `${failures} CHECK(S) FAILED`}`)
